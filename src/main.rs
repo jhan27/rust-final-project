@@ -1,3 +1,6 @@
+use image_processor::image;
+
 fn main() {
-    println!("Hello, world!");
+    image::import();
 }
+
