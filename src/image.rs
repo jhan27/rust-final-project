@@ -21,6 +21,7 @@ pub struct Dimensions {
     height: u32,
 }
 
+#[derive(Copy, Clone)]
 pub struct Pixel {
     r: u8,
     g: u8,
@@ -78,8 +79,8 @@ impl OwnedImage {
         self.pixels[index+3] = pix.alpha;
     }
 
-    pub fn save_image(&self){
-        let image = match image::save_buffer("processed.png", &self.pixels,
+    pub fn save_image(&self, name: &str){
+        let image = match image::save_buffer(name, &self.pixels,
                                              self.dims.width, self.dims.height, image::RGBA(8)) {
             Ok(img) => {img}
             Err(err) => return dispatch_error(ImageError::ImageOperationFailed)
@@ -106,6 +107,9 @@ pub trait Image {
 
     /// Returns a new image that is this one flipped.
     fn flipped(&self, horiz: bool, vert: bool) -> Self::Owned;
+
+    /// Return s new image that is this one in grayscale
+    fn greyscale(&self) -> Self::Owned;
 }
 
 
@@ -127,7 +131,7 @@ impl Image for OwnedImage{
 
         let spec = SliceSpec {offset: (x*4, y*4),
             dims: Dimensions{ width: w, height: h},
-            stride: (img_dims.width, img_dims.height),
+            size: (img_dims.width, img_dims.height),
             orientation: Orientation:: I};
 
         ImageSlice {pixels: &self.get_pixels(), spec}
@@ -164,6 +168,27 @@ impl Image for OwnedImage{
 
         OwnedImage:: new(Dimensions{ width, height}, pixels.into_boxed_slice())
     }
+
+    fn greyscale(&self) -> Self::Owned {
+        let width = self.dims.width;
+        let height = self.dims.height;
+
+        let mut pixels = Vec::new();
+
+        for j in 0..height {
+            for i in 0..width {
+                let p = self.get_pixel(i,j);
+                let mut avg = 0.299 * (p.r as f32) + 0.587 * (p.g as f32) + 0.114 * (p.b as f32);
+                let avg = avg as u8;
+                pixels.push(avg);
+                pixels.push(avg);
+                pixels.push(avg);
+                pixels.push(p.alpha);
+            }
+        }
+
+        OwnedImage:: new(Dimensions{ width, height}, pixels.into_boxed_slice())
+    }
 }
 
 
@@ -184,6 +209,9 @@ pub trait ImageMut: Image {
 
     /// Flips this image in place.
     fn flip(&mut self, horiz: bool, vert: bool);
+
+    /// Turn this image into greyscale in place.
+    fn greyscale_mut(&mut self);
 
     /// Blurs this image into another, existing image.
     /// (You can probably override this with something faster.)
@@ -210,11 +238,43 @@ impl ImageMut for OwnedImage {
         unimplemented!()
     }
 
-    fn split_mut(&mut self, x: u32, y: u32) -> SplitMut {unimplemented!()}
+    fn split_mut(&mut self, x: u32, y: u32) -> SplitMut {
+        unimplemented!()
+    }
 
     fn blur(&mut self, amount: u32) {unimplemented!()}
 
-    fn flip(&mut self, horiz: bool, vert: bool) {unimplemented!()}
+    fn flip(&mut self, horiz: bool, vert: bool) {
+        let width = self.dims.width;
+        let height = self.dims.height;
+
+        for j in 0..height {
+            for i in 0..(width+1)/2 {
+                let saved = self.get_pixel(i, j);
+
+                let p;
+                if horiz && vert {
+                    p = self.get_pixel(width-i-1, height-j-1);
+                    self.set_pixel(width-i-1, height-j-1, saved);
+                } else if horiz {
+                    p = self.get_pixel(width-i-1, j);
+                    self.set_pixel(width-i-1, j, saved);
+                } else if vert {
+                    p = self.get_pixel(i, height-j-1);
+                    self.set_pixel(i, height-j-1, saved);
+                } else {
+                    break;
+                }
+                self.set_pixel(i, j, p);
+            }
+        }
+    }
+
+    fn greyscale_mut(&mut self) {
+        self.pixels = self.pixels.into_par_iter()
+            .map(|&i| (i as f32 * 0.3) as u8)
+            .collect()
+    }
 
     fn blur_from(&mut self, amount: u32, source: impl Image) {
         self.blit_from(source);
@@ -227,6 +287,7 @@ impl ImageMut for OwnedImage {
     }
 
     fn blit_from(&mut self, source: impl Image) {unimplemented!()}
+
 }
 
 /***************************************** Other Structs **********************************************/
@@ -245,9 +306,9 @@ pub struct ImageSliceMut<'a> {
 }
 
 pub struct SliceSpec {
-    offset: (u32, u32),
-    stride: (u32, u32),
-    dims: Dimensions,
+    offset: (u32, u32), // x and y offsets
+    size: (u32, u32), // this is the dimension of original owned image
+    dims: Dimensions, // this is the dimension of the slice
     orientation: Orientation,
 }
 
@@ -268,7 +329,7 @@ impl<'a> ImageSlice<'a> {
 
     pub fn transform_pixel_index(&self) -> Matrix<u8>{
         let (off_x, off_y)= self.spec.offset;
-        let (w, h) = self.spec.stride;
+        let (w, h) = self.spec.size;
         let dims = &self.spec.dims;
 
         let mut buffer = Vec::new();
@@ -282,6 +343,14 @@ impl<'a> ImageSlice<'a> {
 
         buffer.into_boxed_slice()
     }
+
+    pub fn save_image(&self, name: &str) {
+        let pixels = self.transform_pixel_index();
+        let image = match image::save_buffer(name, &*pixels, self.spec.dims.width, self.spec.dims.height,image::RGBA(8)) {
+            Ok(img) => {img}
+            Err(err) => return dispatch_error(ImageError::ImageOperationFailed)
+        };
+    }
 }
 
 /****************************************** Functions *************************************************/
@@ -293,10 +362,12 @@ pub fn import() {
         Err(err) => return dispatch_error(ImageError::InvalidFormat)
     };
 
-    let image = OwnedImage::import(img);
+    let mut image = OwnedImage::import(img);
 
-    let flipped = image.flipped(false, true);
-    flipped.save_image();
+    let greyscale = image.crop(100, 100, Dimensions{width: 100, height: 100});
+    image.greyscale_mut();
+
+    image.save_image("greyscale.png");
 }
 
 
@@ -309,7 +380,7 @@ fn dispatch_error(err: ImageError) {
 
 #[derive(Debug, Snafu)]
 pub enum ImageError {
-    #[snafu(display("Can't open image because of invalid format"))]
+    #[snafu(display("Can't open image due to error"))]
     InvalidFormat,
 
     #[snafu(display("Can't parse the raw pixel vector into a matrix"))]
