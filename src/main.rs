@@ -1,4 +1,4 @@
-use image_processor::image;
+use image_processor::{image};
 
 fn main() {
     image::import();
