@@ -1,6 +1,6 @@
-use image_processor::{image};
+use image_processor::{utils};
 
 fn main() {
-    image::import();
+    utils::import();
 }
 
