@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["ImageSlice","A borrowed slice of an image."],["ImageSliceMut","A mutable, borrowed slice of an image."]]});
