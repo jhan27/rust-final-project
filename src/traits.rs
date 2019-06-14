@@ -41,7 +41,7 @@ pub trait ImageMut: Image {
     /// Blurs this image into another, existing image.
     /// (You can probably override this with something faster.)
     fn blur_from(&mut self, amount: u32, source: impl Image) {
-        self.copy_from(source);
+        self.copy_from(&source);
         self.blur(amount);
     }
 
@@ -49,11 +49,11 @@ pub trait ImageMut: Image {
     /// (You can probably override this with something faster.)
     fn flip_from(&mut self, horiz: bool, vert: bool, source: impl Image) {
 
-        self.copy_from(source);
+        self.copy_from(&source);
         self.flip(horiz, vert);
     }
 
     /// Copies into this image from another, existing image.
-    /// (Do dimensions need to match?)
-    fn copy_from(&mut self, source: impl Image);
+    /// Dimensions don't need to match, and follow those of the new one
+    fn copy_from(&mut self, source: &impl Image);
 }
